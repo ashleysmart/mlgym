@@ -3,8 +3,9 @@ import pandas as pd
 
 import matplotlib.pyplot as plt
 
-def load_titanic():
-    datadir = "~/data/kraggle/titanic/"
+def load_titanic(datadir = None):
+    if datadir is None:
+        datadir = "~/data/kaggle/titanic/"
     testfile = datadir + "test.csv"
     trainfile = datadir + "train.csv"
 
