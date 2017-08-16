@@ -1,0 +1,2320 @@
+<!DOCTYPE html>
+<!-- saved from url=(0041)https://bl.ocks.org/mbostock/raw/9656675/ -->
+<html>
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+    <title>Qlearning</title>
+  </head>
+  <body>
+    <script src="./libs/d3.v3.min.js"></script>
+	<script type="text/javascript" src="data/prerender_latex.js"></script>
+	<script type="text/javascript" src="data/brain_art.js"></script>
+    <script>
+
+var width  = screen.width * 0.9;
+var height = screen.height  * 0.9;
+
+var latex_font = 22;
+
+var slide_hidden_opacity = 0.02;
+
+var svg = d3.select("body").append("svg")
+    .attr("display", "block")
+    .attr("margin", "auto")
+    .attr("width", width)
+    .attr("height", height)
+    .on("click", stopped, true);
+
+// ******************** start shadow effect ****************
+
+// filter chain comes from:
+// https://github.com/wbzyl/d3-notes/blob/master/hello-drop-shadow.html
+// cpbotha added explanatory comments
+// read more about SVG filter effects here: http://www.w3.org/TR/SVG/filters.html
+
+// filters go in defs element
+var defs = svg.append("defs");
+
+// background
+defs.append("pattern")
+    .attr("id", "background")
+    .attr("patternUnits", "userSpaceOnUse")
+    .attr('width', width)
+    .attr('height', height);
+
+// create filter with id #drop-shadow
+// height=130% so that the shadow is not clipped
+var filter = defs.append("filter")
+    .attr("id", "drop-shadow")
+    .attr("height", "150%");
+
+// SourceAlpha refers to opacity of graphic that this filter will be applied to
+// convolve that with a Gaussian with standard deviation 3 and store result
+// in blur
+filter.append("feGaussianBlur")
+    .attr("in", "SourceAlpha")
+    .attr("stdDeviation", 5)
+    .attr("result", "blur");
+
+// translate output of Gaussian blur to the right and downwards with 2px
+// store result in offsetBlur
+var feOffset = filter.append("feOffset")
+    .attr("in", "blur")
+    .attr("dx", 3)
+    .attr("dy", 3)
+    .attr("result", "offsetBlur");
+
+// overlay original SourceGraphic over translated blurred opacity by using
+// feMerge filter. Order of specifying inputs is important!
+var feMerge = filter.append("feMerge");
+feMerge.append("feMergeNode")
+    .attr("in", "offsetBlur")
+feMerge.append("feMergeNode")
+    .attr("in", "SourceGraphic");
+
+// ******************** end shadow effect ****************
+
+// ************************ zoom logic ********************************
+
+// TODO clean up this stuff 
+
+var outer = svg.append("g");
+var zoomTargets = outer.append("g");
+
+var zoom = d3.behavior.zoom()
+    .translate([0, 0])
+    .scale(1)
+    .scaleExtent([1, 8])
+    .on("zoom", zoomed);
+
+outer
+    .call(zoom) // delete this line to disable free zooming
+    .call(zoom.event);
+
+var active = d3.select(null);
+
+function focus_reset() {
+	active.classed("active", false);
+	active = d3.select(null);
+
+	outer.transition()
+		.duration(750)
+		.call(zoom.translate([0, 0]).scale(1).event);
+}
+
+function focus_zoomTo(bounds)
+{
+	var dx = bounds.width;
+	var dy = bounds.height;
+	var x  = bounds.x + bounds.width / 2;
+	var y  = bounds.y  + bounds.height / 2;
+	var scale = Math.max(1, Math.min(8, 0.9 / Math.max(dx / width, dy / height)));
+	var translate = [width / 2 - scale * x, height / 2 - scale * y];
+
+	outer.transition()
+	  .duration(2000)
+	  .call(zoom.translate(translate).scale(scale).event);
+}
+
+
+function focus_clicked(bounds) {
+	//if (active.node() === this) return focus_reset();
+	// focus_zoomTo(this);
+	focus_zoomTo(bounds)
+}
+
+function focus_highlight(d) {
+	d3.select(this).attr("stroke", "black");
+}
+
+function focus_unhighlight(d) {
+	d3.select(this).attr("stroke", "none");
+}
+
+function zoomed() {
+	//zoomTargets.style("stroke-width", 1.5 / d3.event.scale + "px");
+	outer.attr("transform", "translate(" + d3.event.translate + ")scale(" + d3.event.scale + ")");
+}
+
+// If the drag behavior prevents the default click,
+// also stop propagation so we don’t click-to-zoom.
+function stopped() {
+	if (d3.event.defaultPrevented) d3.event.stopPropagation();
+}
+
+// ****************************** zoom overlays
+
+function install_zoomer(zoomPoints)
+{
+    // zoom back catch all
+    zoomTargets.append("rect")
+        .attr("class", "background")
+        .attr("width", width)
+        .attr("height", height)
+        .style("pointer-events", "all")
+        .style("fill", "none")
+        //.style("fill", "url(#background)")
+        .on("click", focus_reset);
+    
+    // zoom in catch point
+    var zoomables = zoomTargets.selectAll("items")
+      .data(zoomPoints)
+      .enter()
+        .append("rect", )
+        	.attr("class", "zoomWindows")
+            .attr("width", function(d) { return d.width; })
+            .attr("height", function(d) { return d.height; })
+            .style("pointer-events", "all")
+            .style("fill", "none")
+            .attr("transform", function(d) { return "translate(" + d.x + "," + d.y +")" })
+            //.attr("stroke", "black")
+            //.on("mouseover", focus_highlight)
+            //.on("mouseout",  focus_unhighlight)
+            .on("click", function(d) { return function(e) { focus_zoomTo(d);}; });
+
+    function zoomTo(idx)
+    {
+    	focus_zoomTo(zoomPoints[idx]);
+    	//zoomables[0][idx].click();
+    }
+
+    return {zoomTo: zoomTo};
+}
+
+// ********************************** brain background **********************
+
+var brain_art = window.brain_art;
+
+var brain_margin = 50
+var brain_scaler = d3.scale.linear()
+                           .range([brain_margin,Math.min(width,height) - brain_margin*2]);
+
+var padding = 6, // separation between nodes
+    maxRadius = 10;
+    minRadius = 2;
+
+var n = 500; // total number of nodes
+//var n = 50; // total number of nodes
+var m = 3;  // number of distinct clusters
+var o = 3;   // number of categories
+
+var color = d3.scale.category10()
+    .domain(d3.range(m));
+
+var x = d3.scale.ordinal()
+    .domain(d3.range(m))
+    .rangePoints([0, width], 1);
+
+var nodes = d3.range(n).map(function() {
+  var i = Math.floor(Math.random() * brain_art.length);
+  var v = Math.random();
+  var c = Math.floor(Math.random() * o);
+
+  return {
+    radius: minRadius + Math.sqrt(v) * maxRadius,
+    color: color(c),
+    cx: brain_scaler(brain_art[i][0]),
+    cy: brain_scaler(brain_art[i][1]),
+    r: minRadius + Math.sqrt(v) * maxRadius,
+  };
+});
+
+// acs foci lens color..
+//nodes[n-1].color =  "yellow";
+
+function replace()
+{
+  var j = Math.floor(Math.random() * n);
+
+  if (!nodes[j].locked )
+  {
+    var i = Math.floor(Math.random() * brain_art.length);
+	nodes[j].cx = brain_scaler(brain_art[i][0]);
+  	nodes[j].cy = brain_scaler(brain_art[i][1]);
+  }
+}
+
+function chargeBall(idx, level)
+{
+	nodes[idx].locked = true;
+	force.charge(function(d, i) { return i == idx ? level : 0 ; });	
+
+	// enable the charge to push the other stuff away
+    force.start();
+}
+
+function moveBall(idx,x,y,r,cidx)
+{
+	nodes[idx].locked = true;
+	nodes[idx].cx = x;
+	nodes[idx].cy = y;
+	nodes[idx].radius = r;
+	
+	if (typeof(cidx) !== "undefined") nodes[idx].color = color(cidx);
+
+	// enable the charge to push the other stuff away
+    force.start();
+}
+
+function releaseBall(idx)
+{
+	var i = Math.floor(Math.random() * brain_art.length);
+	nodes[idx].locked = false;
+	nodes[idx].cx = brain_scaler(brain_art[i][0]);
+  	nodes[idx].cy = brain_scaler(brain_art[i][1]);
+
+	// enable the charge to push the other stuff away
+    force.start();
+}
+
+var force = d3.layout.force()
+    .nodes(nodes)
+    .size([width, height])
+    .gravity(0)
+    .charge(0)
+    .on("tick", tick)
+    .start();
+
+var background = outer.append("g");
+
+var circle = background.selectAll("circle")
+	.data(nodes)
+	  .enter()
+	  	.append("circle")
+		    //.attr("r", function(d) { return d.radius; })
+		    .style("fill", function(d) { return d.color; })
+            .style("opacity", 0.7)
+		    .call(force.drag);
+
+function tick(e) {
+  circle
+      .each(gravity(.09 * e.alpha))
+      .each(collide(.5))
+      .attr("cx", function(d) { return d.x; })
+      .attr("cy", function(d) { return d.y; })
+      .attr("r",  function(d) { return d.r; })
+	  .style("fill", function(d) { return d.color; });
+}
+
+// Move nodes toward cluster focus.
+function gravity(alpha) {
+  return function(d) {
+    d.y      += (d.cy - d.y) * alpha;
+    d.x      += (d.cx - d.x) * alpha;
+    d.r      += (d.radius - d.r)  * Math.sqrt(alpha);
+
+    if (alpha > 0.5)
+    	force.charge(0);
+  };
+}
+
+// Resolve collisions between nodes.
+function collide(alpha) {
+  var quadtree = d3.geom.quadtree(nodes);
+  return function(d) {
+    var r = d.radius + maxRadius + padding,
+        nx1 = d.x - r,
+        nx2 = d.x + r,
+        ny1 = d.y - r,
+        ny2 = d.y + r;
+    quadtree.visit(function(quad, x1, y1, x2, y2) {
+      if (quad.point && (quad.point !== d)) {
+        var x = d.x - quad.point.x,
+            y = d.y - quad.point.y,
+            l = Math.sqrt(x * x + y * y),
+            r = d.radius + quad.point.radius + (d.color !== quad.point.color) * padding;
+        if (l < r) {
+          l = (l - r) / l * alpha;
+          d.x -= x *= l;
+          d.y -= y *= l;
+          quad.point.x += x;
+          quad.point.y += y;
+        }
+      }
+      return x1 > nx2 || x2 < nx1 || y1 > ny2 || y2 < ny1;
+    });
+  };
+}
+
+var anneal = 1.0; 
+var interval = 500; // in milliseconds
+var makeCallback = function() {
+  // note that we're returning a new callback function each time
+  return function() {
+    replace();
+    force.start();
+
+    anneal = 1.1 * anneal
+    d3.timer(makeCallback(), anneal*interval);
+    return true;
+  }
+};
+d3.timer(makeCallback(), interval);
+
+
+// **************************** tree render/animator handles
+
+function make_tree(outer, data, effects)
+{
+    var height = 500;
+    var width  = 450;
+    var id = 0;
+    var duration = 750;
+    var radius = 30;
+    var root;
+
+    var tree = d3.layout.tree()
+        .size([height, width]);
+
+    var diagonal = d3.svg.diagonal()
+        .projection(function(d) { return [d.x, d.y]; });
+
+    var treeGroup =  outer.append("g");
+    
+    function update(source) 
+    {
+      // Compute the new tree layout.
+      var nodes = tree.nodes(root).reverse(),
+          links = tree.links(nodes);
+
+      // Normalize for fixed-depth.
+      nodes.forEach(function(d) { d.y = d.depth * 180; });
+
+      // Update the nodes…
+      var node = treeGroup.selectAll("g.node")
+          .data(nodes, function(d) { return d.id || (d.id = ++id); });
+
+      // Enter any new nodes at the parent's previous position.
+      var nodeEnter = node.enter().append("g")
+          .attr("class", "node")
+          .attr("transform", function(d) { return "translate(" + source.x0 + "," + source.y0 + ")"; })
+          .on("click", show_hide);
+
+      nodeEnter.append("circle")
+          .attr("r", 1e-6)
+          .attr("y", 30)
+          .style("fill", function(d) { return d._children ? "lightsteelblue" : "#fff"; });
+
+      if (typeof(effects) !== 'undefined')
+	  {
+	      nodeEnter.append("polygon")
+	            .attr("points",function(d) {
+	                if ( effects[d.effect] != undefined)
+	                {
+	                    return effects[d.effect].map(function(p) { 
+	                        return [p.x,p.y].join(","); }).join(" ");
+	                }
+	                return "";
+	            })
+	            //.style("stroke", "steelblue")
+	            //.style("stroke-width", "3px")
+	            //.attr("fill", "none");
+	            .attr("fill", function(d) { return d.mark ? "#ce0022" : "steelblue" });
+	   }
+
+      nodeEnter.append("text")
+          .attr("dx", 0)
+          .attr("dy", ".35em")
+          .attr("text-anchor", "middle")
+          .text(function(d) { return d.value; })
+          .style("fill-opacity", 1e-6);
+
+
+      // Transition nodes to their new position.
+      var nodeUpdate = node.transition()
+          .duration(duration)
+          .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+
+      nodeUpdate.select("circle")
+          .attr("r", radius)
+          .style("stroke", function(d) { return d.mark ? "#ce0022" : "steelblue" })
+          .style("stroke-width", "3px")
+          .style("fill", function(d) { return d._children ? "lightsteelblue" : "#fff"; });
+
+      nodeUpdate.select("polygon")
+          .style("fill", function(d) { return d.mark ? "#ce0022" : "steelblue" });
+
+      nodeUpdate.select("text")
+          .text(function(d) { return d.value; })
+          .style("fill-opacity", 1);
+
+      // Transition exiting nodes to the parent's new position.
+      var nodeExit = node.exit().transition()
+          .duration(duration)
+          .attr("transform", function(d) { return "translate(" + source.x + "," + source.y + ")"; })
+          .remove();
+
+      nodeExit.select("circle")
+          .attr("r", 1e-6);
+
+      nodeExit.select("text")
+          .text(function(d) { return d.value; })
+          .style("fill-opacity", 1e-6);
+
+      // Update the links…
+      var link = treeGroup.selectAll("path.link")
+          .data(links, function(d) { return d.target.id; });
+      // Enter any new links at the parent's previous position.
+      link.enter().insert("path", "g")
+          .attr("class", "link")
+          .style("stroke", "#ccc")
+          .style("stroke-width", "2px")
+          .style("fill", "none")
+          .attr("d", function(d) {
+            var o = {x: source.x0, y: source.y0};
+            return diagonal({source: o, target: o});
+          });
+
+      // Transition links to their new position.
+      link.transition()
+          .duration(duration)
+          .attr("d", diagonal);
+
+      // Transition exiting nodes to the parent's new position.
+      link.exit().transition()
+          .duration(duration)
+          .attr("d", function(d) {
+            var o = {x: source.x, y: source.y};
+            return diagonal({source: o, target: o});
+          })
+          .remove();
+
+      // Stash the old positions for transition.
+      nodes.forEach(function(d) {
+        d.x0 = d.x;
+        d.y0 = d.y;
+      });
+
+    }
+
+    function show_hide(d) {
+      if (d.children) {
+        d._children = d.children;
+        d.children = null;
+      } else {
+        d.children = d._children;
+        d._children = null;
+      }
+      update(d);
+    }
+
+    function highlight(d) {
+      if (d.mark) {
+        d.mark = false;
+      } else {
+        d.mark = true;
+      }
+      update(d);
+    }
+
+    function change_text(d, value) {
+      d.value = value;
+      update(d);
+    }
+
+    root = data[0];
+    root.x0 = width / 2;
+    root.y0 = 200;
+
+    update(root);
+
+    return {root: root, 
+    	group: treeGroup,
+    	show_hide: show_hide, 
+    	highlight: highlight, 
+    	change_text: change_text};
+}
+
+//function render_trees(outer, data)
+//{
+//	Object.keys(data).forEach(function (k) { data[k].handle = make_tree(outer, data[k]); })
+//}
+
+// **************************** maze animation
+
+function render_maze(outer)
+{
+    // for each rendered node, apply #drop-shadow filter
+    var walls = [
+        {x : 100, y: 100},
+        {x : 300, y: 100},
+        {x : 100, y: 300},
+        {x : 200, y: 300},
+        {x : 300, y: 300}
+    ];
+
+    var wallHdl = outer.selectAll("rect")
+        .data(walls)
+        .enter()
+            .append("rect")
+                .attr("width", 95)
+                .attr("height", 95)
+                .attr("fill", "steelblue")
+                .attr("stroke-width", 2)
+                .style("filter", "url(#drop-shadow)")
+                .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; });
+
+    // here's the bit of code that makes the blocks breathe for you
+    var dest_min = 3, dest_max = 3, dest = dest_min;
+
+    var diamondPoly = [{x:0.0,  y:30.0},
+                       {x:30.0, y: 0.0},
+                       {x:60.0, y:30.0},
+                       {x:30.0, y:60.0}];
+
+	// treasure
+    function renderTreasure(parent, color, stuff)
+    {
+        var theGroup = parent.append("g")
+            .style('opacity', 0);
+            //.attr("display", "none");
+
+        theGroup.selectAll("knownShapes")
+            .data(stuff)
+            .enter()
+                .append("polygon")
+                    .attr("points",function(d) { 
+                        return diamondPoly.map(function(d) { return [d.x,d.y].join(","); }).join(" ");
+                    })
+                    .style("filter", "url(#drop-shadow)")    
+                    .attr("transform", function(d) { return "translate(" + d.x + "," + d.y +")" })
+                    .attr("fill-opacity",  "0.9")
+                    .attr("fill",  color);
+
+        theGroup.selectAll("knownText")
+            .data(stuff)
+            .enter()
+                .append("text")
+                    .text(function(d) { return d.v; })
+                    .attr("transform", function(d) { return "translate(" + d.x + "," + d.y +")" })
+                    .attr('x', 17)
+                    .attr('y', 35)
+                    .attr('fill', 'black')
+
+        return theGroup;
+    }
+
+    var diamondAll = renderTreasure(outer, "#41f4a6",
+        [
+            {x: 220, y: 220, v: "+41"},
+        ]);
+
+    var diamondLeft = renderTreasure(outer, "#ffff66",
+         [
+            {x: 120, y: 220, v: "+ 1"},
+        ]);
+    diamondLeft.style('opacity', 1);
+
+    // short range known 
+    var knownGroup = renderTreasure(outer, "#41f4a6",
+        [
+            {x: 220, y: 120, v: "+ 0"},
+            {x: 220, y: 320, v: "- 1"},
+            {x: 320, y: 220, v: "+ 0"}
+        ]);
+ 
+	// long range guess	
+    var guessesGroup = renderTreasure(outer, "#41f4a6",
+        [
+            {x:  20, y: 220, v: "+20"},
+            {x: 220, y:  20, v: "+ 0"},
+            {x: 220, y: 420, v: "- 1"},
+            {x: 420, y: 220, v: "+40"}
+        ]);
+
+	// bot and his movement path
+    var bot_path = [
+        {x : 250, y: 150},
+        {x : 250, y: 250},
+        {x : 150, y: 250},
+        {x : 250, y: 250},
+        {x : 350, y: 250},
+        {x : 250, y:  50}
+    ];
+
+	var bot = outer.append("circle")
+				    .attr("fill", "#990000")
+				    .attr("stroke-width", 2)
+				    .style("filter", "url(#drop-shadow)")    
+				    .attr("transform", "translate(" + bot_path[0].x + "," + bot_path[0].y + ")")
+					.attr("r", 40);
+
+    var botPathLine = d3.svg.line()
+        .x(function(d) { return d.x; })
+        .y(function(d) { return d.y; })
+        .interpolate("linear");
+
+
+    function translateTarget(bot_path, idx) {
+        return function(i) {
+            var line = botPathLine(bot_path.slice(idx,idx+2));
+
+            var path = outer.append("path")
+                    .attr("d", line)
+                    .attr("fill", "none").node();
+
+            var l = path.getTotalLength();
+            return function(t) {
+                var p = path.getPointAtLength(t * l);
+                return "translate(" + p.x + "," + p.y + ")";//Move marker
+            }
+        }
+    }
+
+    var theTree =  [
+        {
+            value: "?",
+            _children: 
+            [
+                {
+                    effect: "N", value: 0,
+                    _children: 
+                    [
+                        {
+                            effect: "N", value: 0
+                        },
+                        {
+                            effect: "E", value: +40
+                        },
+                        {
+                            effect: "S", value: -1
+                        },
+                        {
+                            effect: "W", value: +20
+                        }
+                    ]
+                },
+                {
+                    effect: "E", value: 0,
+                    _children: 
+                    [
+                        {
+                            effect: "N", value: 0
+                        },
+                        {
+                            effect: "E", value: +40
+                        },
+                        {
+                            effect: "S", value: -1
+                        },
+                        {
+                            effect: "W", value: +20
+                        }
+                    ]
+                },
+                {
+                    effect: "S", value: -1,
+                    _children: 
+                    [
+                        {
+                            effect: "N", value: 0
+                        },
+                        {
+                            effect: "E", value: +40
+                        },
+                        {
+                            effect: "S", value: -1
+                        },
+                        {
+                            effect: "W", value: +20
+                        }
+                    ]
+                },
+                {
+                    effect: "W", value: +1,
+                    _children: 
+                    [
+                        {
+                            effect: "N", value: 0
+                        },
+                        {
+                            effect: "E", value: +40
+                        },
+                        {
+                            effect: "S", value: -1
+                        },
+                        {
+                            effect: "W", value: +20
+                        }
+                    ]
+                }
+            ]
+        }
+    ];
+
+    function bot_movement(idx, speed) 
+    {
+        if (idx + 1 >= bot_path.length) return;
+
+        bot.transition()
+            .duration(speed)
+            .attrTween("transform", translateTarget(bot_path,idx));
+    }
+
+    function show_object(theGroup, speed)
+    {
+        theGroup
+                .transition()
+                .delay(function(d,i) { return i * 10; })
+                .duration(speed)
+                .style('opacity', 1);
+    }
+
+    function hide_object(theGroup, speed)
+    {
+        theGroup
+                .transition()
+                .delay(function(d,i) { return i * 10; })
+                .duration(speed)
+                .style('opacity', 0);
+    }
+
+    var arrow   = 25;
+    var arrow2  = 12;
+    var effects = {
+        "N": [{x:-arrow, y:-arrow2}, {x:0.0, y:-arrow}, {x:+arrow, y:-arrow2}],
+        "S": [{x:-arrow, y:+arrow2}, {x:0.0, y:+arrow}, {x:+arrow, y:+arrow2}],
+        "W": [{y:-arrow, x:-arrow2}, {y:0.0, x:-arrow}, {y:+arrow, x:-arrow2}],
+        "E": [{y:-arrow, x:+arrow2}, {y:0.0, x:+arrow}, {y:+arrow, x:+arrow2}]
+    };
+
+	var treeOuter = outer.append("g")
+		    .attr("transform", "translate(400,0)")
+
+    var treeHdl = make_tree(treeOuter, theTree, effects); 
+
+    return { 
+    	diamondAll:   diamondAll,
+	    diamondLeft:  diamondLeft,
+        knownGroup:   knownGroup,
+	    guessesGroup: guessesGroup, 
+	    bot:          bot,
+        treeHdl:      treeHdl, 
+    	hide_object:  hide_object, 
+     	show_object:  show_object, 
+    	bot_movement: bot_movement };
+}
+
+
+// **************************** slide sequance
+
+function show(group)
+{
+	group.transition()
+		.duration(750)
+		.style('opacity', 0.9);
+}
+
+function hide(group)
+{
+	group.transition()
+		.duration(750)
+		.style('opacity', slide_hidden_opacity);
+}
+
+// 2 modes of execution
+// play:  on the timer do the 
+// minor step: go to the next minor step
+// major step: go to the next major step
+
+function install_animate(animate_steps, svg, zoomer)
+{
+	var size_c  = 15;
+	var size_c0 = 5;
+	var space  = 3;
+
+	var major_idx = 0;
+	var minor_idx = 0;
+
+	var current_major_idx = -1;
+
+	var playing = false;
+
+	function step_forward()
+	{
+		console.log("step_forward");
+
+		if (!playing) return;
+
+		minor_idx += 1;
+		if (minor_idx >= animate_steps[major_idx].steps.length)
+		{	
+			major_idx += 1;
+			if (major_idx >= animate_steps.length)
+			{
+				major_idx = animate_steps.length - 1;
+				minor_idx = animate_steps[major_idx].steps.length -1;
+				playing = false; 
+			}
+			else
+			{
+				minor_idx = 0;
+			}
+		}
+		update();		
+	}
+
+	function update()
+	{
+		console.log("update", major_idx, " (", animate_steps[major_idx].slide, ") ", minor_idx);
+ 
+		// check the major..
+		if (major_idx != current_major_idx)
+		{
+			// change to new majors focus...
+			zoomer.zoomTo(animate_steps[major_idx].slide);
+
+			//setLens(animate_steps[major_idx].x + animate_steps[major_idx].width/2.0,
+			//		animate_steps[major_idx].y + animate_steps[major_idx].height/2.0,
+			//		animate_steps[major_idx].width/1.5);
+		}
+
+		// do the required action..
+		animate_steps[major_idx].steps[minor_idx].action();
+
+		// setup the timer call back (if we are animmating)
+		if (playing)
+		{
+			console.log("timer", animate_steps[major_idx].steps[minor_idx].timeOut);
+
+
+			var makeCallback = function() {
+				// note that we're returning a new callback function each time
+				return function() {
+					step_forward(); 
+				    return true;
+				}
+			};
+			d3.timer(makeCallback(), animate_steps[major_idx].steps[minor_idx].timeOut);
+			controlsLayer
+	            .style('opacity', 0.1);
+		}
+		else
+		{
+			controlsLayer
+	            .style('opacity', 0.8);
+		}
+
+	}
+
+	function major_back()
+	{
+		playing = false;
+		major_idx = Math.max(major_idx - 1, 0);
+		minor_idx = 0;
+		update();
+	}
+
+	function minor_back()
+	{
+		playing = false;
+		minor_idx -= 1;
+		if (minor_idx < 0 )
+		{	
+			major_idx -= 1;
+			if (major_idx < 0)
+			{
+				major_idx = 0;
+				minor_idx = 0;
+			}
+			else
+			{
+				minor_idx = animate_steps[major_idx].steps.length - 1;
+			}
+		}
+		update();
+	}
+
+	function play()
+	{
+		console.log("play");		
+		playing = !playing;
+		update();
+	}
+
+	function minor_forward()
+	{
+		playing = false;
+		minor_idx += 1;
+		if (minor_idx >= animate_steps[major_idx].steps.length)
+		{	
+			major_idx += 1;
+			if (major_idx >= animate_steps.length)
+			{
+				major_idx = animate_steps.length - 1;
+				minor_idx = animate_steps[major_idx].steps.length -1;
+			}
+			else
+			{
+				minor_idx = 0;
+			}
+		}
+		update();
+	}
+
+	function major_forward()
+	{
+		playing = false;
+		major_idx += 1;
+		if (major_idx >= animate_steps.length)
+		{
+			major_idx = animate_steps.length - 1;
+			minor_idx = animate_steps[major_idx].steps.length -1;
+		}
+		else
+			minor_idx = 0;
+		update();
+	}
+
+	var controls = [
+		{i:0, action:major_back,    shape:[
+			[size_c0,size_c+size_c0],[size_c,2*size_c],[size_c,0],[size_c0,size_c-size_c0],
+			[size_c0,0],[0,0],[0,2*size_c],[size_c0,2*size_c]]},
+		{i:1, action:minor_back,    shape:[[size_c,0],[0,size_c],[size_c,2*size_c]]},
+		{i:2, action:play,          shape:[
+			[size_c0,0],[0,0],[0,2*size_c],[size_c0,2*size_c],[size_c0,0],
+			[2*size_c0,0],[size_c+2*size_c0,size_c],[2*size_c0,2*size_c],[2*size_c0,0]]},
+		{i:3, action:minor_forward, shape:[[0,0],[size_c,size_c],[0,2*size_c]]},
+		{i:4, action:major_forward, shape:[
+			[size_c-size_c0,size_c+size_c0],[0,2*size_c],[0,0],[size_c-size_c0,size_c-size_c0],
+			[size_c-size_c0,0],[size_c,0],[size_c,2*size_c],[size_c-size_c0,2*size_c]]},
+	];
+
+	var off_x = width  - controls.length*(2*size_c+space);
+	var off_y = height - 2*size_c;
+
+	controlsLayer = svg.append("g")
+        .style('opacity', 0.8)
+        .attr("transform", "translate(" + off_x + "," + off_y + ")");
+
+	controlsLayer.selectAll("control")
+      	.data(controls)    	
+		  .enter()
+            .append("polygon")
+				.attr("points",function(d) { 
+				    return d.shape.map(function(e) { return e.join(","); }).join(" ");
+				})
+  		  		.on("click", function(d) { d.action(); })
+			    //.attr("cx",  function(d) { return (2*d.i+1)*size_c + d.i*space; }) 
+			    //.attr("cy", size_c)
+		    	//.attr("r",  size_c)
+				.attr("transform", function(d) { return "translate(" + ((2*d.i+1)*size_c + d.i*space) + ",0)" })
+		    	.style("fill", "grey");
+}
+
+function render_slide(outer, id, data)
+{
+	slide = outer.append("g")
+		.attr("id", "slide_" + id)
+		.style('opacity', slide_hidden_opacity)
+		.attr("transform", "translate(" + data.x + "," + data.y + ")");
+	
+	if ("lines" in data)
+	{
+		var font  = data.font;
+		var off_x = 0; 
+		var step  = data.height / (data.lines.length+1);
+
+	    if ( "off_x"       in data) { off_x = data.off_x; }
+
+	    var latex_off_x = 0;
+	    if ( "latex_off_x" in data) { latex_off_x = data.latex_off_x; }
+	            
+	    // auto index the items
+	    var i = 0;
+	    data.lines.forEach(function(p,idx,a) { a[i].i = i; i++; });
+	    
+		function slide_line_x(d, is_latex)
+		{
+			if ("x"  in d) return d.x;
+
+			var x = off_x;
+			if ("dx" in d) x += d.dx;        
+			if (is_latex)  x += latex_off_x;
+			return x;  
+		}
+
+		function slide_line_y(d, is_latex)
+		{
+			if ("y"  in d) return d.y;
+
+			var y = (d.i+1)*step;
+			if ("dy" in d) y += d.dy; 
+			return y;
+		}
+
+		var lineGroup = slide.selectAll("lines")
+			.data(data.lines)        
+				.enter();
+	    
+	    lineGroup
+			.append("text")
+	            .attr("class", function(d) { return "line_" + d.i; })
+	            .filter(function(d){ return "text" in d; })
+				.attr("x", function(d) { return slide_line_x(d, false); })
+	            .attr("y", function(d) { return slide_line_y(d, false); })
+	            .text( function (d) { return d.text; } )
+	                .attr("font-size", function(d) { return font + "px"; });
+
+	    lineGroup
+			.append("g")
+	            .attr("class", function(d) { return "line_" + d.i; })
+			    .attr("transform", function(d) {
+	                var x = slide_line_x(d, true);
+	                var y = slide_line_y(d, true);
+
+	                // some offset exists in the latex redner
+	                y = y - font*0.9; 
+	                return "translate(" + x + "," + y + ")";
+	            })
+	            .filter(function(d){ return "latex" in d; })
+				.append("g")
+		            .attr("transform", function(d) {
+		                var scale = font / latex_font;
+		                return "scale(" + scale + ")";        
+		            })
+				    .html(function(d){ 
+				    	if (!(d.latex in window.latex_prerender))
+				    	{
+				    		console.log("missing latex:", d.latex);
+					    	return "<text font-size=22px y=22>" + d.latex + "</text>"; 
+				    	}
+				    	return window.latex_prerender[d.latex]; 
+				    })
+
+		function highlight_line(idx, color)
+		{
+			//console.log("#slide_" + id, ".line_" + idx, color)
+			var selected = d3.select("#slide_" + id);
+			selected = selected.selectAll(".line_" + idx).attr("fill", color);
+		}
+
+		function highlight_regex(reg, color)
+		{
+			var matches = data.lines.filter(function (d) { return reg.test(d.latex) || reg.test(d.text); });
+			//console.log(matches);
+			matches.forEach(function (d) { highlight_line(d.i, color); } );
+		}
+	}
+
+    var tree_hdl = null;
+    if ("tree" in data)
+	{
+		var treeOuter = slide.append("g")
+		    .attr("transform", "translate(" + data.tree.x  + "," + data.tree.y  + ")")
+			.append("g")
+	            .attr("transform", "scale(" + data.tree.scale + ")");        
+
+    	tree_hdl = make_tree(treeOuter, data.tree.data);	
+	}
+
+	var special_hdl = null;
+	if ("special" in data)
+	{
+		var outer = slide.append("g")
+		    .attr("transform", "translate(" + data.special.x  + "," + data.special.y  + ")")
+			.append("g")
+	            .attr("transform", "scale(" + data.special.scale + ")");        
+
+		special_hdl = data.special.action(outer);
+	}
+
+
+    return { slide: slide, 
+    	special: special_hdl,
+    	tree: tree_hdl,
+    	highlight_re:   highlight_regex
+    };
+}
+
+function render_slides(outer, slides)
+{
+	slideGroup = outer.append("g");
+
+	var keys = Object.keys(slides);
+    keys.forEach(function (s) { slides[s].handle = render_slide(slideGroup,s,slides[s]); });
+
+	return slideGroup;
+}
+
+var tbs = 15; // text book line spacing
+var tbe = 300;
+              
+var slide_deck = {
+    title: {             
+        x: 0,
+        y: 0,
+        width: width,  // 180 to the left
+        height: height,
+	    font: 90, 
+		lines:[
+			{ x: width/3, y: height - 200, text: "Q-learning" },
+		]
+    },
+    whoami: {             
+        x: 100,
+        y: 100,
+        width: 150,  // 180 to the left
+        height: 100,
+	    font: 10, 
+	    latex_off_x: 30,
+		lines:[
+			{ text: "Ashley Smart" },
+			{ dx:10, text: "Machine learning hobbyist" },
+			{ dx:10, text: "blog: http://code-slim-jim.blogspot.jp" },
+			{ dx:10, text: "git:  http://github.com/ashleysmart" },
+		]
+    },
+    basics: {
+        x: 1000,
+        y: 600,
+        width: 200,
+        height: 150,
+	    font: 9, 
+	    latex_off_x: 30,
+		lines:[
+			{ text: "What is Q learning" },
+			{ dx: 10, text: " - The Q function is a estimate of the systems potential value" },
+			{ dx: 10, text: " - It is accessed based on" }, 
+			{ dx: 20, text: " - The environment" }, 
+			{ dx: 20, text: " - The actions that can be taken" }, 
+			{ dx: 20, text: " - The rewards that can be aquired" },
+			{ dx: 10, text: " - The Q function is the target we are trying to learn" },
+			{ dx: 20, text: " - It can be implemented as a neural network, table etc" },
+	    ]
+    },
+    laymans: {
+        x: 1100,
+        y: 100,
+        width: 400,
+        height: 200,
+        special: {
+        	x:0, y:0, scale: 0.45,
+        	action: render_maze
+        }
+    },
+    textbook: {
+        x: 10,
+        y: 400,
+        width: 400,
+        height: 200,
+	    font: 10, 
+	    latex_off_x: 10,
+		lines:[
+			{ y:1 *tbs, text:  "The textbook formula" },
+
+			{ y:2 *tbs, latex: "Q'(s_t, a_t)=Q(s_t,a_t)+\\alpha\\Big(r_t+\\gamma\\max_{a}Q(s_{t+1},a)-Q(s_t,a_t)\\Big)" },
+
+			{ y:3 *tbs, text:  "Where" },
+			{ y:4 *tbs, latex: "Q"       }, { dx:30, y:4 *tbs, text: ": The function that guess the total 'value' of rewards" },
+			{ y:5 *tbs, latex: "Q'"      }, { dx:30, y:5 *tbs, text: ": The new iteration of the 'value'" },
+			{ y:6 *tbs, latex: "s_t"     }, { dx:30, y:6 *tbs, text: ": The “State” of the environment at time 't'" },
+			{ y:7 *tbs, latex: "a_t"     }, { dx:30, y:7 *tbs, text: ": The “action” perform at time 't'" },
+			{ y:8 *tbs, latex: "r_t"     }, { dx:30, y:8 *tbs, text: ": The “reward” received for the action at 't'" },			
+			{ y:9 *tbs, latex: "s_{t+1}" }, { dx:30, y:9 *tbs, text: ": The “State” of the environment after action at time 't'" },
+			{ y:10*tbs, latex: "a"       }, { dx:30, y:10*tbs, text: ": A possible action performed from state 't+1' " },
+			{ y:11*tbs, latex: "\\alpha" }, { dx:30, y:11*tbs, text: ": The learning rate, how quickly to adjust when wrong" },
+			{ y:12*tbs, latex: "\\gamma" }, { dx:30, y:12*tbs, text: ": The discount rate, how important/trusted future rewards are" },
+		]
+    },
+    wtf: {             
+        x: 950,
+        y: 300,
+        width: 150,
+        height: 50,
+	    font: 8, 
+	    latex_off_x: 8,
+		lines:[{ text: "Of course everyone understood that..." }]
+    },
+    manipluate: {             
+        x: 900,
+        y: 500,
+        width: 175,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+		 { text: "Lets manipulate the formula into something better" },
+		 { latex: "Q'(s_t, a_t)=Q(s_t,a_t)+\\alpha\\Big(r_t+\\gamma\\max_{a}Q(s_{t+1},a)-Q(s_t,a_t)\\Big)" },
+		 { latex: "Q'(s_t, a_t)=(1-\\alpha)Q(s_t, a_t)+\\alpha\\Big(r_t+\\gamma\\max_{a}Q(s_{t+1}, a)\\Big)" },
+		 { latex: "Q_{update}=r_t+\\gamma\\max_{a}Q(s_{t+1}, a)" },
+		 { latex: "Q_{new}=(1-\\alpha)Q_{current}+\\alpha Q_{update}" },
+		 { text: "" },		 
+		 { text: "What does that mean:" },
+		 { dx:5, text: " - Alpha is acting as a ratio to merge old and new info for the next iteration" },
+		 { dx:5, text: " - The real target is 'Q update' (explained next) " },
+		]
+	},
+    whats_q: {             
+        x: 700,
+        y: 300,
+        width: 175,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+		 { text: "So what is 'Q' " },
+		 { dx:5, text:  " - Given that Q-learning does this:" },
+		 { dx:5, latex: "Q_{new}=(1-\\alpha)Q_{current}+\\alpha Q_{update}" },
+		 { dx:5, text:  " - When learning is complete all 3 parts will match:" },
+     { dx:5, latex: "Q_{update} \\approx Q_{current} \\approx Q_{new}" },
+		 { dx:5, text:  " - So the core of what it learns is:" },
+     { dx:5, latex: "Q_{final} \\approx Q_{update}=r_t+\\gamma\\max_{a} Q(s_{t+1},a)" },
+		]
+    },    
+    why_textbook: {             
+        x: 900,
+        y: 200,
+        width: 175,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+         { text: "So why the harder format" },
+         { dx:5, latex: "Q'(s_t, a_t)=Q(s_t,a_t)+\\alpha\\Big(r_t+\\gamma\\max_{a}Q(s_{t+1},a)-Q(s_t,a_t)\\Big)" },
+		     { dx:5, text: "vs" },
+		     { dx:5, latex: "Q'(s_t, a_t)=(1-\\alpha)Q(s_t, a_t)+\\alpha\\Big(r_t+\\gamma\\max_{a}Q(s_{t+1}, a)\\Big)"},
+		     { dx:5, text: "The key is:" },
+	       { dx:5, latex: "r_t+\\gamma\\max_{a}Q(s_{t+1},a) \\approx Q(s_t,a_t)" },
+  		   { text: "What does that mean:" },
+		     { dx:5, text: " - As far as I can tell the textbook form appears to be written for a more" },
+		     { dx:10, text: "optimal numerical implementation" },
+    	   { dx:5, text: " - Given alpha ~ 0.1, and (1-alpha) ~ 0.9 " },
+		     { dx:5, text: " - There is is a difference of 3 bits in scale on a +/- operands" },
+		     { dx:5, text: " - Compounded that error over thousands of repeated steps" },
+  		]
+    },    
+    deeper: {             
+        x: 400,
+        y: 700,
+        width: 100,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+		     { y:0,  text:  "Lets have a closer look:" },
+         { y:10, latex: "Q_{update}=r_t+\\gamma\\max_{a}Q(s_{t+1}, a)"},
+         { y:20, text: "Assume a gamma of 1" },
+		],
+		tree: {
+			//x:15, y:10, scale:0.12,
+			x:40, y:-10, scale:0.17,
+			data: [
+			    {
+			        "value": "0 / ?", // 0 / 4
+			        //"mark": true,
+			        "children": 
+			        [
+			            {
+			                "value": "+1 / ?", //"+1 / 3",
+			                "children": 
+			                [
+			                    {
+			                        "value": "+1 / ?", //"+1 / 2"
+			                        "children": 
+			                        [
+			                            {
+			                                "value": "-1 / -1"
+			                            },
+			                            {
+			                                "value": "0  / 0"
+			                            },
+			                            {
+			                                "value": "+1 / 1"
+			                            },
+			                            {
+			                                "value": "0 /  0"
+			                            }
+			                        ]
+			                    },
+			                    {
+			                        "value": "0 / 0"
+			                    },
+			                    {
+			                        "value": "-1 / -1"
+			                    },
+			                    {
+			                        "value": "+1 /  1"
+			                    }
+			                ]
+			            },
+			            {
+			                "value": "0 / ?", // "0 / 4",
+			                //"mark": true,
+			                "children": 
+			                [
+			                    {
+			                        "value": "-1 / ?", // "-1 / 4",
+			                        //"mark": true,
+			                        "children": 
+			                        [
+			                            {
+			                                "value": "+5 / 5",
+			                                //"mark": true
+			                            },
+			                            {
+			                                "value": "0  / 0"
+			                            },
+			                        ]                        
+			                    },
+			                    {
+			                        "value": "+1 / 1"
+			                    }
+			                ]
+			            },
+			        ]
+			    }
+			]
+		}
+    },    
+    reality_check: {             
+        x: 1100,
+        y: 500,
+        width: 175,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+		 {        text:  "Reality check.." },
+		 { dx:5,  text:  "Pay very close attention to the formulas.. " },
+		 { dx:5,  latex: "Q_{new}=(1-\\alpha)Q_{current}+\\alpha Q_{update}" },
+     { dx:5,  text:  "Note that:" },
+  	 { dx:10,  text:  " - This is iterative" },
+  	 { dx:10,  text:  " - This is top down" },
+     { dx:5,  latex: "Q_{update}=r_t+\\gamma\\max_{a}Q(s_{t+1}, a)" },
+		 { dx:5,  text:  "Note carefully the effect and scope of the “max” " },
+		 { dx:10, text:  " - This is the *local* best not the *global*." },
+		 { dx:10, text:  " - It is a heuristic know in computer science as Greedy Optimization." },
+		 { dx:5, text:  "These are the key flaws in this algorithm" },
+		]
+    },    
+    reality_deeper: {             
+        x: 300,
+        y: 100,
+        width: 100,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+	  	 { y:0,  text:  "So what really happens:" },
+       { y:10, latex: "Q_{update}=r_t+\\gamma\\max_{a}Q(s_{t+1}, a)" },
+		],
+		tree: {
+			//x:15, y:10, scale:0.12,
+			x:40, y:-10, scale:0.17,
+			data: [
+			    {
+			        "value": "0 / 0",  // "0 / 3",
+			        //"mark": true,
+			        "_children": 
+			        [
+			            {
+			                "value": "+1 / 1", // "+1 / 3",
+			                //"mark": true,
+			                "_children": 
+			                [
+			                    {
+			                        "value": "+1 / 1", // "+1 / 2",
+			                        //"mark": true,
+			                        "_children": 
+			                        [
+			                            {
+			                                "value": "-1 / -1"
+			                            },
+			                            {
+			                                "value": "0  / 0" // "0  / 0"
+			                            },
+			                            {
+			                                //"mark": true,
+			                                "value": "+1 / 1" // "+1 / 1"
+			                            },
+			                            {
+			                                "value": "0 /  0" // "0 /  0"
+			                            }
+			                        ]
+			                    },
+			                    {
+			                        "value": "0 / 0" // "0 /  0"
+			                    },
+			                    {
+			                        "value": "-1 / -1"
+			                    },
+			                    {
+			                        "value": "+1 / 1" // "+1 /  1"
+			                    }
+			                ]
+			            },
+			            {
+			                "value": "0 / 0",
+			                "_children": 
+			                [
+			                    {
+			                        "value": "-1 / -1", // "-1 / ?",
+			                        "children": 
+			                        [
+			                            {
+			                                "value": "+5 / 5"
+			                            },
+			                            {
+			                                "value": "0  / 0"
+			                            },
+			                        ]                        
+			                    },
+			                    {
+			                        "value": "+1 / +1" // "+1 / 1"
+			                    }
+			                ]
+			            },
+			        ]
+			    }
+			]
+		}
+    },    
+    advanced: {             
+        x: 850,
+        y: 800,
+        width: 175,
+        height: 80,
+	    font: 5, 
+	    latex_off_x: 5,
+		lines:[
+		 {        text:  "For the advanced guys" },
+		 { dx:5,  text:  "The master algorithm is still up for grabs we can make advancements and" },
+		 { dx:5,  text:  "changes to the standard Qlearning:" },
+     { dx:50, latex: "Q_{update}=r_t+\\gamma\\max_{a}Q(s_{t+1}, a)" },
+		 { dx:5,  text:  "For example it can possibly be regulated given the same data using a secondary(r’)" },
+		 { dx:10, text:  "and smaller parameterized tertiary(Q’’) network as follows:" },
+     { dx:50, latex: "Q_{update}=r_t",},
+     { dx:65, latex: "+\\gamma_1\\max_{a}Q(s_{t+1},a)"},
+     { dx:65, latex: "+\\gamma_2\\max_{a_1,a_2} \\big( r'_{t+1}(a_1)+Q''(s_{t+2},a_2) \\big)" },
+		]
+    },    
+};
+
+zoomer = install_zoomer(slide_deck);
+render_slides(outer, slide_deck);
+
+var tbdx = 270; // text book diagram offset x
+var tbdy = 90;  // text book diagram offset y
+
+// after slide render as it uses the render groupds
+var animate_steps =  [
+    {             
+        slide: "title",
+        steps: [
+           {
+               action:  function() { show(slide_deck["title"].handle.slide); },
+               timeOut: 7000
+           },
+           {
+               action:  function() { hide(slide_deck["title"].handle.slide); },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "whoami",
+        steps: [
+           {
+               action:  function() { show(slide_deck["whoami"].handle.slide); },
+               timeOut: 13000
+           },
+           {
+               action:  function() { hide(slide_deck["whoami"].handle.slide); },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "basics",
+        steps: [
+           {
+               action:  function() { show(slide_deck["basics"].handle.slide); },
+               timeOut: 13000
+           },
+           {
+               action:  function() { hide(slide_deck["basics"].handle.slide); },
+               timeOut: 10
+           },
+        ]
+    },
+    {
+        slide: "laymans",
+        steps: [
+            {
+               action:  function() { show(slide_deck["laymans"].handle.slide); },
+               timeOut: 2000
+            },
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.bot_movement(0, 2000); },
+		        timeOut: 6000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.treeHdl.group); },
+		        timeOut: 5000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.knownGroup, 1250); },        
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.treeHdl.show_hide(slide_deck["laymans"].handle.special.treeHdl.root); },        
+		        timeOut: 5000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.guessesGroup, 1250); },
+		        timeOut: 5500
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.treeHdl.show_hide(slide_deck["laymans"].handle.special.treeHdl.root.children[1]); },
+		        timeOut: 1000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.treeHdl.show_hide(slide_deck["laymans"].handle.special.treeHdl.root.children[3]); },
+		        timeOut: 2000
+        	},
+        	{
+		        action: function() { 
+		        	slide_deck["laymans"].handle.special.treeHdl.highlight(slide_deck["laymans"].handle.special.treeHdl.root.children[1].children[1]);
+		        	slide_deck["laymans"].handle.special.treeHdl.highlight(slide_deck["laymans"].handle.special.treeHdl.root.children[3].children[1]);
+		        },
+		        timeOut: 2000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.treeHdl.highlight(slide_deck["laymans"].handle.special.treeHdl.root.children[3]); },
+		        timeOut: 2000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.hide_object(slide_deck["laymans"].handle.special.knownGroup, 1250); },        
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.treeHdl.show_hide(slide_deck["laymans"].handle.special.treeHdl.root.children[1]); },
+		        timeOut: 1000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.bot_movement(1, 2000); },
+		        timeOut: 2000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.hide_object(slide_deck["laymans"].handle.special.diamondLeft, 100); },
+		        timeOut: 100
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.bot_movement(2, 2000); },        
+		        timeOut: 2000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.bot_movement(3, 2000); },
+		        timeOut: 2000
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.hide_object(slide_deck["laymans"].handle.special.guessesGroup, 1250); },
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.hide_object(slide_deck["laymans"].handle.special.bot, 1250); },        
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { 
+		        	slide_deck["laymans"].handle.special.bot_movement(4, 1); 
+		            slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.diamondLeft,  1250); 
+		        },
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.knownGroup,   1250); },
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.guessesGroup, 1250); },
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.diamondAll,   1250); },
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.hide_object(slide_deck["laymans"].handle.special.knownGroup,   1250); },
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.hide_object(slide_deck["laymans"].handle.special.guessesGroup, 1250); },       
+		        timeOut: 1250
+        	},
+        	{
+		        action: function() { slide_deck["laymans"].handle.special.show_object(slide_deck["laymans"].handle.special.bot, 1250); },
+		        timeOut: 1250
+        	},
+            {
+               action:  function() { hide(slide_deck["laymans"].handle.slide); },
+               timeOut: 10
+            },
+        ]
+    },
+    {
+        slide: "textbook",
+        steps: [
+           {
+               action:  function() { 
+               	show(slide_deck["textbook"].handle.slide); 
+	            slide_deck["textbook"].handle.highlight_re(/.*/, "black");
+	           },
+               timeOut: 3000
+           },
+           {
+           	   // move stuff into view
+               action:  function() { 
+               	i = 0;
+               	locs = [[tbdx+30,tbdy+40],
+               	        [tbdx+30,tbdy+10],[tbdx+60,tbdy+ 0], [tbdx+90,tbdy+10],[tbdx+120,tbdy+20],
+               	        [tbdx+30,tbdy+60],[tbdx+60,tbdy+60], [tbdx+90,tbdy+70],[tbdx+120,tbdy+60]];
+
+               	locs.forEach(function (xy) { 
+               		moveBall(i,slide_deck["textbook"].x + xy[0],
+               			slide_deck["textbook"].y + xy[1], 
+               			(i == 0 ? 5 : 10),
+               			(i == 0 ? 0 : 2)); 
+               		i +=1; 
+               	}); 
+
+               	// highligh Q
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 4*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x + 55,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(22,slide_deck["textbook"].x +142,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +185,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	//moveBall(24,slide_deck["textbook"].x +100,slide_deck["textbook"].y + 2*tbs, 10,1)
+
+               	// slide_deck["textbook"].handle.highlight_re(/^Q$/,        "red");
+			   },
+               timeOut: 13000
+           },
+           {
+               action:  function() { 
+           	   // highlight Q' 
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 5*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 2*tbs, 8,1);
+
+               	moveBall(22,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+
+               	//slide_deck["textbook"].handle.highlight_re(/Q/,        "black");
+               	//slide_deck["textbook"].handle.highlight_re(/s_/,       "red");
+			   },
+               timeOut: 13000
+           },
+           {
+               action:  function() { 
+           	   // highlight and describe s_t
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 6*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x + 25,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(22,slide_deck["textbook"].x + 65,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +195,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(24,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+
+               	//slide_deck["textbook"].handle.highlight_re(/Q/,        "black");
+               	//slide_deck["textbook"].handle.highlight_re(/s_/,       "red");
+			   },
+               timeOut: 13000
+           },
+           {
+               action:  function() { 
+           	   // move ball into maze
+				moveBall(0,slide_deck["textbook"].x + tbdx + 60, slide_deck["textbook"].y + tbdy + 25, 5);
+
+           	   // highlight and describe a_t
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 7*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x + 35,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(22,slide_deck["textbook"].x + 75,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +205,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(24,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+
+               	//slide_deck["textbook"].handle.highlight_re(/s_/,       "black");
+               	//slide_deck["textbook"].handle.highlight_re(/a_t/,       "red");
+               	//slide_deck["textbook"].handle.highlight_re(/^a$/,       "red");
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+
+           	   // highlight and describe r_t
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 8*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x +103,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(22,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(24,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+			   },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+           	   // highlight and describe s_t+1
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 9*tbs-5, 10,1);
+               	moveBall(21,slide_deck["textbook"].x +155,slide_deck["textbook"].y + 2*tbs, 10,1);
+               	moveBall(22,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(24,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+
+               	//slide_deck["textbook"].handle.highlight_re(/Q/,        "black");
+               	//slide_deck["textbook"].handle.highlight_re(/s_/,       "red");
+			   },
+               timeOut: 13000
+           },
+           {
+               action:  function() { 
+           	   // highlight and describe a
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y +10*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x +130,slide_deck["textbook"].y + 2*tbs+5, 4,1);
+               	moveBall(22,slide_deck["textbook"].x +167,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(24,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+			   },
+               timeOut: 2000
+            },
+            {  
+               action:  function() { 
+				moveBall(0,slide_deck["textbook"].x + tbdx + 90, slide_deck["textbook"].y + tbdy + 40, 5);
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+               	// unmove
+				moveBall(0,slide_deck["textbook"].x + tbdx + 60, slide_deck["textbook"].y + tbdy + 25, 5);
+
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+				moveBall(0,slide_deck["textbook"].x + tbdx + 120, slide_deck["textbook"].y + tbdy + 20, 5);
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+               	// unmove
+				moveBall(0,slide_deck["textbook"].x + tbdx + 60, slide_deck["textbook"].y + tbdy + 25, 5);
+
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+				moveBall(0,slide_deck["textbook"].x + tbdx + 90, slide_deck["textbook"].y + tbdy + 50, 5);
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+               	// unmove
+				moveBall(0,slide_deck["textbook"].x + tbdx + 60, slide_deck["textbook"].y + tbdy + 25, 5);
+
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+				moveBall(0,slide_deck["textbook"].x + tbdx + 150, slide_deck["textbook"].y + tbdy + 40, 5);
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+           	   // highlight and describe alpha
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 11*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x + 95,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(22,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+               	moveBall(23,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+                moveBall(24,slide_deck["textbook"].x +tbe,slide_deck["textbook"].y + 2*tbs, 8,1);
+              
+               	//slide_deck["textbook"].handle.highlight_re(/r_t/,       "black");
+               	//slide_deck["textbook"].handle.highlight_re(/alpha/,     "red");
+			   },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+           	   // highlight and describe gamma
+               	moveBall(20,slide_deck["textbook"].x + 15,slide_deck["textbook"].y + 12*tbs-5, 8,1);
+               	moveBall(21,slide_deck["textbook"].x +120,slide_deck["textbook"].y + 2*tbs, 8,1);
+
+               	//slide_deck["textbook"].handle.highlight_re(/alpha/,     "black");
+               	//slide_deck["textbook"].handle.highlight_re(/gamma/,     "red");
+			   },
+               timeOut: 15000
+           },
+           {
+               action:  function() { 
+               	slide_deck["textbook"].handle.highlight_re(/gamma/,     "black");
+               	hide(slide_deck["textbook"].handle.slide); 
+               	i = 0;
+               	while(i < 25) { releaseBall(i); i+=1; }
+               },
+               timeOut: 10
+           },    
+        ]
+    },
+    {
+        slide: "wtf",
+        steps: [
+           {
+               action:  function() { show(slide_deck["wtf"].handle.slide); },
+               timeOut: 5000
+           },
+           {
+               action:  function() { hide(slide_deck["wtf"].handle.slide); },
+               timeOut: 10
+           },   
+        ]
+    },
+    {             
+        slide: "manipluate",
+        steps: [
+           {
+               action:  function() { 
+               	show(slide_deck["manipluate"].handle.slide);
+				moveBall(0,slide_deck["manipluate"].x + 2, slide_deck["manipluate"].y + 15, 2); 
+		       },
+               timeOut: 2000
+           },
+           {
+               action:  function() { chargeBall(0, -1600); },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["manipluate"].x + 2, slide_deck["manipluate"].y + 23, 2); 
+			   },
+               timeOut: 10000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["manipluate"].x + 2, slide_deck["manipluate"].y + 30, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["manipluate"].x + 2, slide_deck["manipluate"].y + 38, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["manipluate"].x + 2, slide_deck["manipluate"].y + 63, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["manipluate"].x + 2, slide_deck["manipluate"].y + 71, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	hide(slide_deck["manipluate"].handle.slide); 
+               	chargeBall(0,0);
+               	releaseBall(0);
+               },
+               timeOut: 10
+           },   
+        ]
+    },
+    {             
+        slide: "whats_q",
+        steps: [
+           {
+               action:  function() { 
+               	show(slide_deck["whats_q"].handle.slide); 
+               	moveBall(0,slide_deck["whats_q"].x + 7, slide_deck["whats_q"].y + 29, 2); 
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { chargeBall(0, -1400); },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["whats_q"].x + 7, slide_deck["whats_q"].y + 46, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["whats_q"].x + 7, slide_deck["whats_q"].y + 68, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	hide(slide_deck["whats_q"].handle.slide);
+               	chargeBall(0,0);
+               	releaseBall(0);
+               },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "why_textbook",
+        steps: [
+           {
+               action:  function() { 
+               	show(slide_deck["why_textbook"].handle.slide); 
+               	moveBall(0,slide_deck["why_textbook"].x + 120, slide_deck["why_textbook"].y + 12, 2); 
+			   },
+               timeOut: 2000
+           },
+           {
+               action:  function() { chargeBall(0, -1400); },
+               timeOut: 2000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["why_textbook"].x + 120, slide_deck["why_textbook"].y + 24, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["why_textbook"].x + 73, slide_deck["why_textbook"].y + 35, 2); 
+			   },
+               timeOut: 20000
+           },
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["why_textbook"].x + 3, slide_deck["why_textbook"].y + 48, 2); 
+			   },
+               timeOut: 20000
+           },           
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["why_textbook"].x + 3, slide_deck["why_textbook"].y + 61, 2); 
+			   },
+               timeOut: 20000
+           },           
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["why_textbook"].x + 3, slide_deck["why_textbook"].y + 66, 2); 
+			   },
+               timeOut: 20000
+           },           
+           {
+               action:  function() { 
+               	 moveBall(0,slide_deck["why_textbook"].x + 3, slide_deck["why_textbook"].y + 72, 2); 
+			   },
+               timeOut: 20000
+           },           
+           {
+               action:  function() { 
+               	hide(slide_deck["why_textbook"].handle.slide);
+               	chargeBall(0,0);
+               	releaseBall(0);
+               },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "deeper",
+        steps: [
+           {
+               action:  function() { show(slide_deck["deeper"].handle.slide); },
+               timeOut: 10000
+           },     
+
+           // left extreame  update
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[2]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[3]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	// remove prior..
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[2]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0].children[3]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0]); 
+
+               	slide_deck["deeper"].handle.tree.change_text(slide_deck["deeper"].handle.tree.root.children[0].children[0], "+1 / 2"); 
+               },
+               timeOut: 4000
+           },
+
+           // right extreame  update
+           {
+               action:  function() { 
+               	// highliht next 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0].children[1]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	// remove prior
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0].children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0]); 
+
+               	slide_deck["deeper"].handle.tree.change_text(slide_deck["deeper"].handle.tree.root.children[1].children[0], "-1 / 4"); 
+               },
+               timeOut: 4000
+           },
+
+           // left mid  update
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[2]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[3]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	// remove prior..
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[2]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0].children[3]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0]); 
+
+               	slide_deck["deeper"].handle.tree.change_text(slide_deck["deeper"].handle.tree.root.children[0], "+1 / 3"); 
+               },
+               timeOut: 4000
+           },
+
+           // right mid update
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[1]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	// remove prior..
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1]); 
+
+               	slide_deck["deeper"].handle.tree.change_text(slide_deck["deeper"].handle.tree.root.children[1], "0 / 4"); 
+               },
+               timeOut: 4000
+           },
+
+           // root update
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	// remove prior..
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root); 
+
+               	slide_deck["deeper"].handle.tree.change_text(slide_deck["deeper"].handle.tree.root, "0 / 4"); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	// highlight best
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0]); 
+               	slide_deck["deeper"].handle.tree.highlight(slide_deck["deeper"].handle.tree.root.children[1].children[0].children[0]); 
+               },
+               timeOut: 6000
+           },
+
+
+           {
+               action:  function() { hide(slide_deck["deeper"].handle.slide); },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "reality_check",
+        steps: [
+           {
+               action:  function() { show(slide_deck["reality_check"].handle.slide); },
+               timeOut: 60000
+           },
+           {
+               action:  function() { hide(slide_deck["reality_check"].handle.slide); },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "reality_deeper",
+        steps: [
+           {
+               action:  function() { show(slide_deck["reality_deeper"].handle.slide); },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.highlight(slide_deck["reality_deeper"].handle.tree.root); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.show_hide(slide_deck["reality_deeper"].handle.tree.root); 
+               },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.highlight(slide_deck["reality_deeper"].handle.tree.root.children[0]); 
+               },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.change_text(slide_deck["reality_deeper"].handle.tree.root, "0 / 1"); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.show_hide(slide_deck["reality_deeper"].handle.tree.root.children[0]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.highlight(slide_deck["reality_deeper"].handle.tree.root.children[0].children[0]); 
+               	slide_deck["reality_deeper"].handle.tree.highlight(slide_deck["reality_deeper"].handle.tree.root.children[0].children[3]); 
+               },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.change_text(slide_deck["reality_deeper"].handle.tree.root.children[0], "+1 / 2"); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.change_text(slide_deck["reality_deeper"].handle.tree.root, "0 / 2"); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.highlight(slide_deck["reality_deeper"].handle.tree.root.children[0].children[3]); 
+               	slide_deck["reality_deeper"].handle.tree.show_hide(slide_deck["reality_deeper"].handle.tree.root.children[0].children[0]); 
+               },
+               timeOut: 8000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.highlight(slide_deck["reality_deeper"].handle.tree.root.children[0].children[0].children[2]); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.change_text(slide_deck["reality_deeper"].handle.tree.root.children[0].children[0], "+1 / 2"); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.change_text(slide_deck["reality_deeper"].handle.tree.root.children[0], "+1 / 3"); 
+               },
+               timeOut: 4000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.change_text(slide_deck["reality_deeper"].handle.tree.root, "0 / 3"); 
+               },
+               timeOut: 10000
+           },
+           {
+               action:  function() { 
+               	slide_deck["reality_deeper"].handle.tree.show_hide(slide_deck["reality_deeper"].handle.tree.root.children[1]); 
+               },
+               timeOut: 20000
+           },
+           {
+               action:  function() { hide(slide_deck["reality_deeper"].handle.slide); },
+               timeOut: 10
+           },
+        ]
+    },
+    {             
+        slide: "advanced",
+        steps: [
+           {
+               action:  function() { show(slide_deck["advanced"].handle.slide); },
+               timeOut: 60000
+           },
+           {
+               //action:  function() { hide(slide_deck["advanced"].handle.slide); },
+               action:  function() {  },
+               timeOut: 10
+           },
+        ]
+    },
+];
+
+
+install_animate(animate_steps, svg, zoomer);
+show(slide_deck["title"].handle.slide);
+
+</script>
+</body></html>
