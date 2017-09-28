@@ -1,4 +1,4 @@
-#!/Users/asmart5/python/ml/bin/python
+#!/usr/bin/env python
 
 import os
 import sys

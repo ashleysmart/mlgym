@@ -1,4 +1,4 @@
-#!/Users/asmart5/python/ml/bin/python
+#!/usr/bin/env python
 
 # service that watches the database file for changes and then starts to class based on the inputs
 
