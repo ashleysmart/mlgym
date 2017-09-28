@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<style>
+
+circle {
+  stroke: #fff;
+}
+
+</style>
+<body>
+ <p>
+    <label for="visable_start" style="display: inline-block; width: 100px; text-align: right">Visable Start:</label>
+    <input type="range" min="0" max="1000" value="0" id="visable_start">
+    <label for="visable_range" style="display: inline-block; width: 100px; text-align: right"> Range:</label>
+    <input type="range" min="0" max="1000" value="1000" id="visable_range">
+ </p>
+    
+<script src="./libs/d3.v3.min.js"></script>
+<script>
+
+var visableStart = 0;
+var visableRange = 1.0;
+var visableCount = 0;
+
+// when the input range changes update the angle 
+d3.select("#visable_start").on("input", function() {
+    visableStart = +this.value / 1000.0;
+    updateVisable(true);
+});
+
+d3.select("#visable_range").on("input", function() {
+    visableRange = +this.value / 1000.0;
+    updateVisable(true);
+});
+
+var width = 1200;
+var height = 700;
+var padding = 6; // separation between nodes
+var maxRadius = 10;
+var minRadius = 2;
+
+function renderForce(database)
+{
+    var count = -1;
+    var nodes = Object.keys(database).map(function(i,idx) {
+        // ACS this to nuts.. simplify
+        database[i]["idx"] = idx;
+
+        // user choice over machines please
+        x = database[i]["m"][0];
+        y = database[i]["m"][1];
+
+        if (database[i]["u"] != null &&
+            database[i]["u"] !== undefined &&
+            database[i]["u"].length > 0)
+        {
+            x = database[i]["u"][0];
+            y = database[i]["u"][1];
+        }
+
+        count += 1;
+        
+        return {
+            radius: 5,
+            idx: count,
+            id: database[i]["id"],
+            opacity: 1.0,
+            targetx: width  * x,
+            targety: height * y,
+            img: database[i]["file"]
+        };
+    });
+    
+    visableCount = count;
+    
+    var force = d3.layout.force()
+        .nodes(nodes)
+        .size([width, height])
+        .gravity(0)
+        .charge(0)
+        .on("tick", tick)
+        .start();
+
+    var svg = d3.select("body").append("svg")
+        .attr("width", width)
+        .attr("height", height);
+    
+    var drag = force.drag()
+        .on("dragend", dragend);
+
+    var nodeEnter = svg.selectAll("circle")
+        .data(nodes)
+        .enter().append("svg:g")
+            .attr("class", "node")
+            .style("opacity",  function(d) { return d.opacity; })
+            .attr("transform", function(d) { return "translate(" + d.x + "," + d.y + ")"; })
+            .call(force.drag);
+    
+    // Append images
+    var images = nodeEnter.append("svg:image")
+        .attr("xlink:href",  function(d) { return d.img;})
+        .attr("x", function(d) { return -25;})
+        .attr("y", function(d) { return -25;})
+        .attr("height", 50)
+        .attr("width", 50);
+    
+    // make the image grow a little on mouse over and add the text details on click
+    var setEvents = images
+        .on( 'mouseenter', function() {
+          // select element in current context
+          d3.select( this )
+            .transition()
+            .attr("x", function(d) { return -60;})
+            .attr("y", function(d) { return -60;})
+            .attr("height", 100)
+            .attr("width", 100);
+        })
+        // set back
+        .on( 'mouseleave', function() {
+          d3.select( this )
+            .transition()
+            .attr("x", function(d) { return -25;})
+            .attr("y", function(d) { return -25;})
+            .attr("height", 50)
+            .attr("width", 50);
+        });
+    
+    var nodeGroups = svg.selectAll("g.node");
+
+    function nodeTransform(d) {
+        d.x =  Math.max(50, Math.min(width  - (d.imgwidth/2 || 16), d.x));
+        d.y =  Math.max(50, Math.min(height - (d.imgheight/2 || 16), d.y));
+        return "translate(" + d.x + "," + d.y + ")";
+    }
+
+    
+    function tick(e) {
+        nodeGroups
+            .each(gravity(.01 * e.alpha))
+            .each(collide(.5));
+        
+        nodeGroups
+            .style("opacity", function(d) { return d.opacity; })
+            .style("pointer-events", function(d) { if (d.opacity < 0.5) { return "none"; } return "auto"; })
+            .attr("transform", nodeTransform);
+
+        // circle
+        //     .each(gravity(.1 * e.alpha))
+        //     .each(collide(.5))
+        //     .attr("targetx", function(d) { return d.x; })_
+        //     .attr("targety", function(d) { return d.y; });
+    }
+
+    // Move nodes toward cluster focus.
+    function gravity(alpha) {
+        return function(d) {
+            d.y += (d.targety - d.y) * alpha;
+            d.x += (d.targetx - d.x) * alpha;
+        };
+    }
+
+    // Resolve collisions between nodes.
+    function collide(alpha) {
+        var quadtree = d3.geom.quadtree(nodes);
+        return function(d) {
+            var r = d.radius + maxRadius + padding,
+                nx1 = d.x - r,
+                nx2 = d.x + r,
+                ny1 = d.y - r,
+                ny2 = d.y + r;
+            quadtree.visit(function(quad, x1, y1, x2, y2) {
+                if (quad.point && (quad.point !== d)) {
+                    var x = d.x - quad.point.x,
+                        y = d.y - quad.point.y,
+                        l = Math.sqrt(x * x + y * y),
+                        r = d.radius + quad.point.radius + (d.color !== quad.point.color) * padding;
+                    if (l < r) {
+                        l = (l - r) / l * alpha;
+                        d.x -= x *= l;
+                        d.y -= y *= l;
+                        quad.point.x += x;
+                        quad.point.y += y;
+                    }
+                }
+                return x1 > nx2 || x2 < nx1 || y1 > ny2 || y2 < ny1;
+            });
+        };
+    }
+    
+    function dragend(d)
+    {
+        // dropped.. 
+        var x = d3.event.sourceEvent.x;
+        var y = d3.event.sourceEvent.y;
+        var id = d.id;
+
+        // update database
+        database[id]["u"] = [x,y];
+
+        // setup the visual
+        nodes[id].targetx = x;
+        nodes[id].targety = y;
+
+        nodes[id].x = x;
+        nodes[id].y = y;
+
+        x = x / width;
+        y = y / height;
+        
+        // send new classification to service
+        d3.xhr("/update/user/" + id + "?x=" + x + "&y=" + y,
+               function(error, data){});
+        
+        // d3.select(this).attr("cx", d.x = x).attr("cy", d.y = y);
+    }
+
+
+    return [ nodes, force ];
+}
+
+var timestamp;
+var database = {};
+var nodes;
+var forceHdl;
+
+function reloadModelData()
+{
+    d3.json('/model/refresh',
+           function (error, data) {
+               if (error)
+               {
+                   console.log(error)
+                   return;
+               }
+
+               // ok data here is the set of new model points..
+               // we want to update the targets 
+               for (key in data)
+               {
+                   i = database[key]["idx"]
+                   x = data[key][0];
+                   y = data[key][1];
+                   
+                   database[i]["m"][0] = x;
+                   database[i]["m"][1] = y;
+
+                   has_user = (database[i]["u"] != null &&
+                               database[i]["u"] !== undefined &&
+                               database[i]["u"].length == 2);
+                   
+                   if (! has_user)
+                   {
+                       nodes[i].targetx = width  * x;
+                       nodes[i].targety = height * y;
+                   }
+               }
+
+                // and then start the force render 
+                forceHdl.start();
+           });
+}
+
+function checkDatabase()
+{
+    d3.json('/model/status',
+           function (error, data) {
+               if (error)
+               {
+                   console.log(error)
+                   return;
+               }
+           
+               if (timestamp != data["timestamp"])
+               {
+                   // status signal fired.. go for full model update
+                   timestamp = data["timestamp"];
+                   reloadModelData();
+               }
+           });
+}
+
+function renderDatabase()
+{
+    [ nodes, forceHdl ]  = renderForce(database);
+    
+    // start timer
+    var interval = 1000; // one second in milliseconds
+    var makeUpdateCallback = function() {
+        // note that we're returning a new callback function each time
+        return function() {
+            checkDatabase();
+
+            forceHdl.start();
+            d3.timer(makeUpdateCallback(), interval);
+            return true;
+        }
+    };
+    d3.timer(makeUpdateCallback(), interval);
+}
+
+function loadDatabase()
+{
+    // first get the database from the service
+    d3.json('/database',
+           function (error, data) {
+               if (error)
+               {
+                   console.log(error)
+                   return;
+               }
+               
+               // status signal fired.. go for full model update
+               database = data;
+               renderDatabase();
+           });
+}
+
+// update the element
+function updateVisable(movingStart) {
+    // now set the display none on anything we didnt need
+    console.log("update..");
+    console.log(visableStart);
+    console.log(visableRange);
+    console.log(visableCount);
+
+    var idxStart = visableCount * visableStart;
+    var idxEnd   = visableCount * (visableStart + visableRange);
+
+    console.log(idxStart);
+    console.log(idxEnd);
+    
+    nodes.forEach(function (n) {
+        if     (n.idx < idxStart)                     { n.opacity = 0.02; }
+        else if(n.idx >= idxStart && n.idx <= idxEnd) { n.opacity = 1.0; }
+        else                                          { n.opacity = 0.02; }
+    });
+
+    // nodes.filter(function(d) { return d.idx < idxStart; })
+    //     .opacity = 0.1;
+    // 
+    // nodes.filter(function(d) { return d.idx >= idxStart && d.idx <= idxEnd; })
+    //     .opacity = 1.0;
+    // 
+    // nodes.filter(function(d) { return d.idx > idxEnd; })
+    //     .opacity = 0.1;
+}
+
+loadDatabase();
+                                                      
+</script>
